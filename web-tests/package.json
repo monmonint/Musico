@@ -1,0 +1,9 @@
+{
+  "name": "musico-web-tests",
+  "private": true,
+  "description": "Tests de la page d'écoute Musico (logique de synchro + décodage Opus)",
+  "scripts": {
+    "fixture": "python3 make-fixture.py 6",
+    "test": "node --test"
+  }
+}

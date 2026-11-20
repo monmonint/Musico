@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6a3de8">
+<link rel="icon" href="data:,">
+<title>Musico — Écouter</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #15121f; color: #f3f0ff; }
+  main { max-width: 480px; margin: 0 auto; padding: 24px 20px 40px; }
+  h1 { margin: 0 0 4px; font-size: 32px; }
+  p { line-height: 1.4; }
+  .muted { color: #b5acd6; font-size: 14px; }
+  #listen { display: block; width: 100%; margin: 24px 0 12px; padding: 22px; font-size: 24px; font-weight: 700;
+    border: 0; border-radius: 16px; background: #6a3de8; color: white; }
+  #listen:disabled { background: #4a4460; color: #bbb; }
+  #listen.on { background: #2b2540; color: #e0dbff; border: 2px solid #6a3de8; }
+  #status { font-weight: 600; min-height: 1.4em; }
+  #warn { color: #ffb072; display: none; }
+  .card { background: #211c31; border-radius: 14px; padding: 14px 16px; margin-top: 16px; }
+  label { display: block; margin-bottom: 6px; }
+  input[type=range] { width: 100%; }
+  .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: #b5acd6; }
+  #stats { font-family: ui-monospace, monospace; font-size: 12px; color: #9a91bf; white-space: pre-line; }
+  button.small { padding: 8px 12px; border-radius: 10px; border: 1px solid #6a3de8; background: transparent; color: #e0dbff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎵 Musico</h1>
+  <p class="muted">Écoute la même musique que l'émetteur, en même temps. Rien à installer.</p>
+
+  <button id="listen" disabled>Chargement…</button>
+  <div id="status">Connexion à l'émetteur…</div>
+  <p id="warn"></p>
+
+  <div class="card">
+    <label for="offset">Décalage manuel : <b id="offsetVal">0 ms</b></label>
+    <input id="offset" type="range" min="-300" max="300" step="5" value="0">
+    <div class="row"><span>← plus tôt</span><button class="small" id="offsetReset">0</button><span>plus tard →</span></div>
+    <p class="muted">À utiliser seulement si tu entends un écho avec les autres téléphones.</p>
+    <label for="volume">Volume</label>
+    <input id="volume" type="range" min="0" max="100" step="1" value="100">
+  </div>
+
+  <div class="card">
+    <p class="muted" style="margin-top:0">
+      • Garde cette page ouverte et l'écran allumé (sinon le navigateur coupe le son).<br>
+      • iPhone : si tu n'entends rien, vérifie le volume ; la page essaie de jouer même en mode silencieux.<br>
+      • Si ton téléphone dit « pas d'Internet », choisis de rester connecté au Wi-Fi.
+    </p>
+    <div id="stats"></div>
+  </div>
+</main>
+<script src="opus-decoder.min.js"></script>
+<script src="musico-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
