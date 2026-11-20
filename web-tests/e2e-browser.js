@@ -1,19 +1,20 @@
 /*
  * Test de bout en bout dans un vrai Chrome (headless) contre le vrai serveur Kotlin :
- *   1) MUSICO_LIVE_SECONDS=40 ../gradlew -p .. :core:test --tests '*LiveStreamDemo*' &
+ *   1) MUSICO_LIVE_SECONDS=45 MUSICO_JITTER_MS=40 MUSICO_PROBE=1 ./gradlew :core:test --tests '*LiveStreamDemo*' --rerun &
  *   2) npm i --no-save puppeteer-core && CHROME=/usr/bin/google-chrome node e2e-browser.js
- * Ouvre 2 « auditeurs », appuie sur « Écouter », puis vérifie : réception, décodage, aucun
- * paquet en retard, tampon ≈ latence cible, et que les 2 pages planifient chaque paquet au
- * même instant absolu (écart de synchro entre auditeurs).
+ * Ouvre 2 « auditeurs », appuie sur « Écouter », puis vérifie : réception, décodage, blocs
+ * contigus (aucun trou), aucun saut ni creux malgré la gigue et les ordres de synchro, et que
+ * les 2 pages jouent chaque instant du flux au même moment (écart entre auditeurs).
  */
 const puppeteer = require("puppeteer-core");
 const URL = process.env.MUSICO_URL || "http://127.0.0.1:8099/";
+const WAIT = parseInt(process.env.E2E_WAIT_MS || "25000", 10);
 
 (async () => {
   const browser = await puppeteer.launch({
     executablePath: process.env.CHROME || "/usr/bin/google-chrome",
     headless: true,
-    args: ["--no-sandbox", "--mute-audio", "--use-fake-ui-for-media-stream"],
+    args: ["--no-sandbox", "--mute-audio"],
   });
   const pages = [];
   for (let k = 0; k < 2; k++) {
@@ -26,28 +27,38 @@ const URL = process.env.MUSICO_URL || "http://127.0.0.1:8099/";
     pages.push(p);
     await new Promise((r) => setTimeout(r, 700)); // décale volontairement les 2 auditeurs
   }
-  await new Promise((r) => setTimeout(r, 8000));
+  await new Promise((r) => setTimeout(r, WAIT));
   const stats = [];
   for (const p of pages) {
     stats.push(await p.evaluate(() => {
-      const m = window.__musico;
-      return { received: m.received, decodeErrors: m.decodeErrors, ctx: m.ctxState, ahead: m.ahead,
-        late: m.sched.late, lost: m.sched.lost, resyncs: m.sched.resyncs, offset: m.clock.offset, rtt: m.clock.rtt,
-        planned: m.planned, status: document.getElementById("status").textContent, latency: m.cfg.latencyMs };
+      const m = window.__musico, st = m.player.stats;
+      return { received: m.received, decodeErrors: m.decodeErrors, renderErrors: m.renderErrors, gaps: m.gaps,
+        ctx: m.ctxState, ahead: +m.ahead.toFixed(3), underruns: st.underruns, resyncs: st.resyncs, concealed: st.concealed,
+        errMs: +(st.err * 1000).toFixed(2), offsets: m.offsets, measuredText: document.getElementById("measured").textContent,
+        blocks: m.blocks.slice(-600), trace: m.trace, latency: m.cfg.latencyMs };
     }));
   }
-  let diffs = [];
-  for (const k of Object.keys(stats[0].planned)) {
-    const a = stats[0].planned[k], b = stats[1].planned[k];
-    if (a && b && a.seq === b.seq) diffs.push(Math.abs(a.abs - b.abs));
+  // Écart entre auditeurs : pour chaque bloc de B, instant où A joue le même échantillon du flux
+  const A = stats[0].blocks, B = stats[1].blocks, diffs = [], worst = [];
+  for (const [ts, abs] of B) {
+    for (let j = 1; j < A.length; j++) {
+      if (A[j - 1][0] <= ts && A[j][0] >= ts) {
+        const f = (ts - A[j - 1][0]) / (A[j][0] - A[j - 1][0] || 1);
+        diffs.push(Math.abs(abs - (A[j - 1][1] + f * (A[j][1] - A[j - 1][1]))));
+        if (diffs[diffs.length - 1] > 3) worst.push([+(ts - B[0][0]).toFixed(0), +diffs[diffs.length - 1].toFixed(2)]);
+        break;
+      }
+    }
   }
+  if (worst.length) console.log("écarts > 3 ms (ms depuis le début de la trace, écart):", JSON.stringify(worst.slice(0, 20)));
   diffs.sort((x, y) => x - y);
-  stats.forEach((s, i) => { const { planned, ...rest } = s; console.log("auditeur", i, JSON.stringify(rest)); });
+  if (process.env.E2E_TRACE) stats.forEach((s, i) => { const t = s.trace; console.log("trace", i, JSON.stringify(t.filter((x, k) => k === 0 || Math.abs(x[1] - t[k - 1][1]) > 0.3 || Math.abs(x[2] - t[k - 1][2]) > 0.3))); });
+  stats.forEach((s, i) => { const { blocks, trace, ...rest } = s; console.log("auditeur", i, JSON.stringify(rest)); });
   const med = diffs[Math.floor(diffs.length / 2)], max = diffs[diffs.length - 1];
-  console.log(`écart entre auditeurs sur ${diffs.length} paquets : médiane ${med?.toFixed(2)} ms, max ${max?.toFixed(2)} ms`);
+  console.log(`écart entre auditeurs sur ${diffs.length} blocs : médiane ${med?.toFixed(2)} ms, max ${max?.toFixed(2)} ms`);
   await browser.close();
-  const ok = stats.every((s) => s.received > 300 && s.decodeErrors === 0 && s.ctx === "running" && s.late === 0 &&
-    s.ahead > 0.1 && s.ahead < s.latency / 1000 + 0.05) && diffs.length > 100 && max < 5;
+  const ok = stats.every((s) => s.received > 300 && s.decodeErrors === 0 && s.renderErrors === 0 && s.ctx === "running" &&
+    s.gaps === 0 && s.resyncs === 0 && s.underruns === 0 && Math.abs(s.errMs) < 2) && diffs.length > 100 && max < 5;
   console.log(ok ? "E2E OK" : "E2E ÉCHEC");
   process.exit(ok ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

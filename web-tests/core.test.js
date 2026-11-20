@@ -89,3 +89,22 @@ test("CtxClock : utilise getOutputTimestamp et lisse la gigue", () => {
   fallback.update({ state: "running", currentTime: 3, outputLatency: 0.04, baseLatency: 0.01 }, 1000);
   assert.ok(Math.abs(fallback.toCtx(1000) - 2.95) < 1e-9);
 });
+
+test("ClockSync : glisse sans saut sur un petit changement et rejette les aberrations", () => {
+  const cs = new Core.ClockSync();
+  let local = 0;
+  for (let i = 0; i < 20; i++) { cs.addSample(local, local + 5 + 1000, local + 10); local += 1000; }
+  const before = cs.offset;
+  assert.ok(Math.abs(before - 1000) < 0.01);
+  cs.addSample(local, local + 900 + 2500, local + 1800); // aller-retour énorme : rejeté
+  assert.strictEqual(cs.offset, before);
+  local += 1000;
+  // l'horloge de l'émetteur avance de 10 ms d'un coup : on glisse de 0,5 ms max par mesure
+  let prev = cs.offset;
+  for (let i = 0; i < 60; i++) {
+    cs.addSample(local, local + 5 + 1010, local + 10); local += 1000;
+    assert.ok(Math.abs(cs.offset - prev) <= 0.5 + 1e-9, "saut " + (cs.offset - prev));
+    prev = cs.offset;
+  }
+  assert.ok(Math.abs(cs.offset - 1010) < 0.5);
+});

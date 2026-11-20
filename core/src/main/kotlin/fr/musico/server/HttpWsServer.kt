@@ -87,8 +87,11 @@ class HttpWsServer(
 
     private fun acceptLoop(ss: ServerSocket) {
         while (running.get()) {
-            val s = try { ss.accept() } catch (e: IOException) { break }
-            Thread({ handleConnection(s) }, "musico-http-conn").apply { isDaemon = true }.start()
+            val s = try { ss.accept() } catch (e: Throwable) { if (ss.isClosed) break else continue }
+            if (clients.size >= MAX_CLIENTS) { try { s.close() } catch (_: Throwable) {}; continue }
+            try {
+                Thread({ handleConnection(s) }, "musico-http-conn").apply { isDaemon = true }.start()
+            } catch (_: Throwable) { try { s.close() } catch (_: Throwable) {} }
         }
     }
 
@@ -126,8 +129,9 @@ class HttpWsServer(
                 writeResponse(out, 200, "OK", asset.contentType, asset.bytes, method == "HEAD")
             }
             socket.close()
-        } catch (_: IOException) {
-            try { socket.close() } catch (_: IOException) {}
+        } catch (_: Throwable) {
+            // Jamais d'exception non rattrapée dans un thread : elle tuerait toute l'appli
+            try { socket.close() } catch (_: Throwable) {}
         }
     }
 
@@ -159,11 +163,11 @@ class HttpWsServer(
         try {
             handler.onOpen(client)
             readFrames(client, input)
-        } catch (_: IOException) {
+        } catch (_: Throwable) {
         } finally {
             clients.remove(client)
             client.close()
-            handler.onClose(client)
+            try { handler.onClose(client) } catch (_: Throwable) {}
         }
     }
 
@@ -193,7 +197,9 @@ class HttpWsServer(
                     message.write(payload)
                     if (message.size() > MAX_IN_FRAME) throw IOException("message trop grand")
                     if (fin) {
-                        if (messageOpcode == 0x1) handler.onText(client, message.toString("UTF-8"))
+                        if (messageOpcode == 0x1) {
+                            try { handler.onText(client, message.toString("UTF-8")) } catch (_: Exception) {}
+                        }
                         message.reset()
                     }
                 }
@@ -210,6 +216,12 @@ class HttpWsServer(
         /** Le client ne reçoit l'audio qu'après avoir annoncé être prêt (bouton « Écouter »). */
         @Volatile var ready: Boolean = false
         @Volatile var lastStats: String? = null
+        // Synchro (renseigné par StreamHub)
+        @Volatile var manualMs: Double = 0.0
+        @Volatile var autoMs: Double? = null
+        @Volatile var measuredMs: Double? = null
+        @Volatile var syncStatus: String = ""
+        @Volatile var userAgent: String = ""
         @Volatile var droppedPackets: Long = 0
         private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_CAPACITY)
         private val closed = AtomicBoolean(false)
@@ -238,7 +250,7 @@ class HttpWsServer(
                         while (true) { val n = queue.poll() ?: break; out.write(n) }
                         out.flush()
                     }
-                } catch (_: IOException) {
+                } catch (_: Throwable) {
                     close()
                 }
             }, "musico-ws-writer-$id").apply { isDaemon = true }.start()
@@ -257,6 +269,7 @@ class HttpWsServer(
         const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         const val QUEUE_CAPACITY = 200 // ~4 s d'audio en paquets de 20 ms
         const val MAX_IN_FRAME = 64 * 1024L
+        const val MAX_CLIENTS = 32
 
         fun frame(opcode: Int, payload: ByteArray): ByteArray {
             val len = payload.size

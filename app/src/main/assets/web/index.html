@@ -37,10 +37,15 @@
   <p id="warn"></p>
 
   <div class="card">
+    <div class="row" style="font-size:15px;color:inherit"><span>Écart mesuré avec l'émetteur</span><b id="measured" style="font-size:20px">—</b></div>
+    <p class="muted" id="syncStatus" style="margin:4px 0 0"></p>
+  </div>
+
+  <div class="card">
     <label for="offset">Décalage manuel : <b id="offsetVal">0 ms</b></label>
     <input id="offset" type="range" min="-300" max="300" step="5" value="0">
     <div class="row"><span>← plus tôt</span><button class="small" id="offsetReset">0</button><span>plus tard →</span></div>
-    <p class="muted">À utiliser seulement si tu entends un écho avec les autres téléphones.</p>
+    <p class="muted">La synchro est corrigée automatiquement par le micro de l'émetteur. Ce réglage sert seulement si tu entends encore un écho (ex. enceinte Bluetooth).</p>
     <label for="volume">Volume</label>
     <input id="volume" type="range" min="0" max="100" step="1" value="100">
   </div>

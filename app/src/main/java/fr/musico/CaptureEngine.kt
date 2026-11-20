@@ -25,6 +25,8 @@ class CaptureEngine(
     private val hub: StreamHub,
     private val localPlayer: () -> LocalPlayer?,
     private val isMusicActive: () -> Boolean,
+    /** Copie du PCM capturé (horodaté) pour la mesure acoustique ; ne doit pas bloquer. */
+    private val onPcm: ((Double, ByteArray) -> Unit)? = null,
 ) {
     companion object {
         const val TAG = "MusicoCapture"
@@ -49,7 +51,12 @@ class CaptureEngine(
 
     fun start() {
         running = true
-        thread = Thread({ runLoop() }, "musico-capture").apply {
+        thread = Thread({
+            try { runLoop() } catch (t: Throwable) {
+                Log.e(TAG, "capture", t)
+                error = "Capture interrompue : ${t.message ?: t.javaClass.simpleName}"
+            }
+        }, "musico-capture").apply {
             priority = Thread.MAX_PRIORITY
             start()
         }
@@ -57,7 +64,7 @@ class CaptureEngine(
 
     fun stop() {
         running = false
-        thread?.join(1000)
+        try { thread?.join(1500) } catch (_: Throwable) {}
         thread = null
     }
 
@@ -91,13 +98,13 @@ class CaptureEngine(
         codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         codec.start()
         codec
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         Log.w(TAG, "Encodeur Opus indisponible, repli en PCM", e)
         null
     }
 
     private fun runLoop() {
-        val record = try { buildRecord() } catch (e: Exception) {
+        val record = try { buildRecord() } catch (e: Throwable) {
             error = "Impossible de démarrer la capture : ${e.message}"
             Log.e(TAG, "AudioRecord", e)
             return
@@ -171,7 +178,9 @@ class CaptureEngine(
                 }
 
                 // --- Relecture locale (synchro parfaite côté émetteur) ---
-                localPlayer()?.enqueue(chunkMs, buf.copyOf())
+                try { localPlayer()?.enqueue(chunkMs, buf.copyOf()) } catch (_: Throwable) {}
+                // --- Référence pour la mesure acoustique ---
+                if (onPcm != null) try { onPcm.invoke(chunkMs, buf) } catch (_: Throwable) {}
 
                 // --- Encodage + diffusion ---
                 if (encoder != null) {
@@ -198,15 +207,15 @@ class CaptureEngine(
                     hub.publishAudio(chunkMs, buf)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Boucle de capture", e)
             error = "Capture interrompue : ${e.message}"
         } finally {
-            try { record.stop() } catch (_: Exception) {}
-            record.release()
-            try { encoder?.stop() } catch (_: Exception) {}
-            encoder?.release()
-            hub.setStatus(capturing = false, silent = false, message = "Diffusion arrêtée")
+            try { record.stop() } catch (_: Throwable) {}
+            try { record.release() } catch (_: Throwable) {}
+            try { encoder?.stop() } catch (_: Throwable) {}
+            try { encoder?.release() } catch (_: Throwable) {}
+            try { hub.setStatus(capturing = false, silent = false, message = "Diffusion arrêtée") } catch (_: Throwable) {}
         }
     }
 

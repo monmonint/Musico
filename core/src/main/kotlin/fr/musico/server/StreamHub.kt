@@ -23,7 +23,7 @@ class StreamHub(
     @Volatile var codec: Int = CODEC_OPUS
     @Volatile var sampleRate: Int = 48000
     @Volatile var channels: Int = 2
-    @Volatile var latencyMs: Int = 300
+    @Volatile var latencyMs: Int = 600
     @Volatile var preSkipMs: Double = 0.0
     @Volatile var statusJson: String = status(capturing = false, silent = false, message = "En attente")
 
@@ -32,6 +32,18 @@ class StreamHub(
     fun helloJson(): String =
         """{"t":"hello","codec":"${if (codec == CODEC_OPUS) "opus" else "pcm"}","sampleRate":$sampleRate,"channels":$channels,""" +
             """"latencyMs":$latencyMs,"preSkipMs":$preSkipMs,"serverTime":${nowMs()}}"""
+
+    fun helloJson(client: HttpWsServer.Client): String = helloJson().dropLast(1) + ""","id":${client.id}}"""
+
+    /** Ordre de synchro pour un auditeur : correction auto, sonde de mesure, écart mesuré. */
+    fun sendOffset(client: HttpWsServer.Client, auto: Double, probe: Double, measured: Double?, status: String) {
+        client.autoMs = auto
+        client.measuredMs = measured
+        client.syncStatus = status
+        client.sendText(
+            """{"t":"offset","auto":${fmt(auto)},"probe":${fmt(probe)},"measured":${measured?.let { fmt(it) } ?: "null"},"status":"${escape(status)}"}"""
+        )
+    }
 
     fun configJson(): String = """{"t":"config","latencyMs":$latencyMs}"""
 
@@ -60,7 +72,7 @@ class StreamHub(
     }
 
     override fun onOpen(client: HttpWsServer.Client) {
-        client.sendText(helloJson())
+        client.sendText(helloJson(client))
         client.sendText(statusJson)
     }
 
@@ -71,9 +83,17 @@ class StreamHub(
                 val c = field(text, "c") ?: return
                 client.sendText("""{"t":"pong","c":$c,"s":$recv,"r":$recv}""")
             }
-            "ready" -> client.ready = true
+            "ready" -> {
+                field(text, "manual")?.toDoubleOrNull()?.let { client.manualMs = it.coerceIn(-1000.0, 1000.0) }
+                field(text, "auto")?.toDoubleOrNull()?.let { if (client.autoMs == null) client.autoMs = it.coerceIn(-1000.0, 1000.0) }
+                field(text, "ua")?.let { client.userAgent = it }
+                client.ready = true
+            }
             "pause" -> client.ready = false
-            "stats" -> client.lastStats = text
+            "stats" -> {
+                client.lastStats = text
+                field(text, "manual")?.toDoubleOrNull()?.let { client.manualMs = it.coerceIn(-1000.0, 1000.0) }
+            }
         }
     }
 
@@ -93,6 +113,8 @@ class StreamHub(
 
         fun status(capturing: Boolean, silent: Boolean, message: String): String =
             """{"t":"status","capturing":$capturing,"silent":$silent,"message":"${escape(message)}"}"""
+
+        fun fmt(v: Double): String = if (v.isNaN() || v.isInfinite()) "0" else String.format(java.util.Locale.ROOT, "%.3f", v)
 
         fun escape(s: String): String = buildString {
             for (ch in s) when (ch) {

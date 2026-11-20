@@ -82,7 +82,7 @@ class HttpWsServerTest {
         val (ws, rec) = connect()
         val hello = rec.nextText("hello")
         assertTrue(hello.contains("\"codec\":\"opus\""))
-        assertTrue(hello.contains("\"latencyMs\":300"))
+        assertTrue(hello.contains("\"latencyMs\":600"))
         rec.nextText("status")
 
         ws.sendText("""{"t":"ping","c":1234.5}""", true).get()
@@ -146,5 +146,57 @@ class HttpWsServerTest {
         assertEquals("12.5", StreamHub.field("""{"t":"ping","c":12.5}""", "c"))
         assertEquals("-3e-2", StreamHub.field("""{"c": -3e-2}""", "c"))
         assertEquals("a \\\"b\\\"", StreamHub.escape("a \"b\"").let { it })
+    }
+
+    @Test fun readyCarriesOffsetsAndOffsetMessageIsSent() {
+        val (ws, rec) = connect()
+        val hello = rec.nextText("hello")
+        val id = StreamHub.field(hello, "id")!!.toInt()
+        ws.sendText("""{"t":"ready","manual":-12.5,"auto":33.25,"ua":"Test"}""", true).get()
+        Thread.sleep(200)
+        val c = server.clientList.first { it.id == id }
+        assertTrue(c.ready)
+        assertEquals(-12.5, c.manualMs, 1e-9)
+        assertEquals(33.25, c.autoMs!!, 1e-9)
+        hub.sendOffset(c, 30.0, 3.0, 1.5, "Corrigé")
+        val off = rec.nextText("offset")
+        assertEquals("30.000", StreamHub.field(off, "auto"))
+        assertEquals("3.000", StreamHub.field(off, "probe"))
+        assertEquals("1.500", StreamHub.field(off, "measured"))
+        ws.sendText("""{"t":"stats","manual":7}""", true).get()
+        Thread.sleep(200)
+        assertEquals(7.0, c.manualMs, 1e-9)
+    }
+
+    @Test fun garbageAndBadJsonDoNotKillServer() {
+        // Requête HTTP invalide, octets aléatoires, JSON cassé : le serveur survit
+        java.net.Socket("127.0.0.1", port).use { it.getOutputStream().write(ByteArray(5000) { (it * 7).toByte() }) }
+        java.net.Socket("127.0.0.1", port).use { it.getOutputStream().write("GET\r\n\r\n".toByteArray()) }
+        val (ws, rec) = connect()
+        rec.nextText("hello")
+        ws.sendText("{pas du json", true).get()
+        ws.sendText("""{"t":"ping","c":"abc"}""", true).get()
+        ws.sendText("""{"t":"ready","manual":"NaN"}""", true).get()
+        val (ws2, rec2) = connect()
+        rec2.nextText("hello")
+        ws2.sendText("""{"t":"ping","c":1}""", true).get()
+        rec2.nextText("pong")
+        val r = http.send(HttpRequest.newBuilder(URI("http://127.0.0.1:$port/")).build(), HttpResponse.BodyHandlers.ofString())
+        assertEquals(200, r.statusCode())
+    }
+
+    @Test fun handlerExceptionIsContained() {
+        val bad = object : HttpWsServer.Handler {
+            override fun onText(client: HttpWsServer.Client, text: String) { throw IllegalStateException("boum") }
+        }
+        val s2 = HttpWsServer(18200, { null }, bad)
+        val p2 = s2.start()
+        try {
+            val rec = Recorder()
+            val ws = http.newWebSocketBuilder().buildAsync(URI("ws://127.0.0.1:$p2/ws"), rec).get(3, TimeUnit.SECONDS)
+            repeat(5) { ws.sendText("x", true).get() }
+            Thread.sleep(200)
+            assertEquals(1, s2.clientCount) // toujours connecté
+        } finally { s2.stop() }
     }
 }
